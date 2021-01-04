@@ -1,0 +1,647 @@
+#...............................................................................................#
+#...........Bioregions are predominately climatic for fishes of northern inland lakes...........#
+#...............................................................................................#
+
+#...............................................................................................#
+#...........Author of the script: Charlie Loewen................................................#
+#...........Date latest modifications: 2021-01-04...............................................#
+#...............................................................................................#
+
+#################################################################################################
+########### For conducting bipartite network modularity analysis and analyzing 
+########### derived modules by non-metric partial least-squares structural equation models 
+########### paired with multiple logistic regression under a variation partitioning framework
+#################################################################################################
+
+##################
+# Clear any variables from the R environment
+##################
+
+rm(list=ls())
+while(dev.cur() != 1){ dev.off(dev.cur()) }
+
+##################
+# Load R packages
+##################
+
+library(bipartite)
+
+##################
+# Load data in R environment
+##################
+
+speciesbysite=read.table("speciesbysite.csv",header=T,sep=",",row.names = 1) #matrix of sites (rows) by species (columns)
+
+##################
+# Modularity analysis 
+##################
+
+set.seed(1) #seeding varies with R version
+dirt.lpa.b.plus.net <- computeModules(speciesbysite, method="Beckett", forceLPA=FALSE)
+dirt.lpa.b.plus.net@likelihood #Barbers modularity Q = 0.3539937
+
+# Computes participation coefficient (c)  
+
+dirt.lpa.b.plus.net.cz.lower <- czvalues(dirt.lpa.b.plus.net, level="lower") #site-level calculation
+
+# Site data extraction 
+
+dirt.lpa.b.plus.net.list <- listModuleInformation(dirt.lpa.b.plus.net)
+
+site.mod.1<-dirt.lpa.b.plus.net.list[[2]][[1]][[1]]
+site.mod.1.vector<- as.matrix(if_else(rownames(dirt.lpa.b.plus.net@moduleWeb) %in% site.mod.1, 1, 0))
+site.mod.2<-dirt.lpa.b.plus.net.list[[2]][[2]][[1]]
+site.mod.2.vector<- as.matrix(if_else(rownames(dirt.lpa.b.plus.net@moduleWeb) %in% site.mod.2, 1, 0))
+site.mod.3<-dirt.lpa.b.plus.net.list[[2]][[3]][[1]]
+site.mod.3.vector<- as.matrix(if_else(rownames(dirt.lpa.b.plus.net@moduleWeb) %in% site.mod.3, 1, 0))
+site.mod.4<-dirt.lpa.b.plus.net.list[[2]][[4]][[1]]
+site.mod.4.vector<- as.matrix(if_else(rownames(dirt.lpa.b.plus.net@moduleWeb) %in% site.mod.4, 1, 0))
+
+site.mods <- cbind(site.mod.1.vector, site.mod.2.vector, site.mod.3.vector, site.mod.4.vector)
+rownames(site.mods)<-rownames(dirt.lpa.b.plus.net@moduleWeb)
+colnames(site.mods)<-c("mod1","mod2","mod3","mod4")
+
+site.mods <- merge(site.mods, dirt.lpa.b.plus.net.cz.lower$c, by="row.names")
+rownames(site.mods) <- site.mods$Row.names
+site.mods<-site.mods[,-1]
+site.mods <- merge(site.mods, dirt.lpa.b.plus.net.cz.lower$z, by="row.names")
+rownames(site.mods) <- site.mods$Row.names
+site.mods<-site.mods[,-1]
+
+colnames(site.mods)<-c("mod1","mod2","mod3","mod4", "c", "z")
+
+write.csv(site.mods, file = "site.mods.csv")
+
+# Sp data extraction 
+
+sp.mod.1<-dirt.lpa.b.plus.net.list[[2]][[1]][[2]]
+sp.mod.1.vector<- as.matrix(if_else(colnames(dirt.lpa.b.plus.net@moduleWeb) %in% sp.mod.1, 1, 0))
+sp.mod.2<-dirt.lpa.b.plus.net.list[[2]][[2]][[2]]
+sp.mod.2.vector<- as.matrix(if_else(colnames(dirt.lpa.b.plus.net@moduleWeb) %in% sp.mod.2, 1, 0))
+sp.mod.3<-dirt.lpa.b.plus.net.list[[2]][[3]][[2]]
+sp.mod.3.vector<- as.matrix(if_else(colnames(dirt.lpa.b.plus.net@moduleWeb) %in% sp.mod.3, 1, 0))
+sp.mod.4<-dirt.lpa.b.plus.net.list[[2]][[4]][[2]]
+sp.mod.4.vector<- as.matrix(if_else(colnames(dirt.lpa.b.plus.net@moduleWeb) %in% sp.mod.4, 1, 0))
+
+sp.mods <- cbind(sp.mod.1.vector, sp.mod.2.vector, sp.mod.3.vector, sp.mod.4.vector)
+rownames(sp.mods)<-colnames(dirt.lpa.b.plus.net@moduleWeb)
+colnames(sp.mods)<-c("mod1","mod2","mod3","mod4")
+
+write.csv(sp.mods, file = "sp.mods.csv")
+
+##################
+# Clear any variables from the R environment
+##################
+
+rm(list=ls())
+while(dev.cur() != 1){ dev.off(dev.cur()) }
+
+##################
+# Load R packages
+##################
+
+library(plspm)
+library(modEvA)
+library(eulerr)
+library(grid)
+library(gridExtra)
+
+##################
+# Load data in R environment
+##################
+
+sitemodenv=read.table("sitemodenv.csv",header=T,sep=",",row.names = 1) #file available in repository
+
+##################
+# Non-metric partial least-squares structural equation model
+##################
+
+#### Multilevel categorical ####
+
+# rows of the path matrix
+
+Connectivity = c(0,0,0,0)
+Habitat = c(0,0,0,0)
+Climate = c(0,0,0,0)
+Categ = c(1,1,1,0)
+
+# vector of modes A reflective and B composite
+
+sem_modes = c("B","B","B","B")
+
+# path matrix (inner model)
+
+sem_path = rbind(Connectivity, Habitat, Climate, Categ)
+colnames(sem_path) = rownames(sem_path)
+
+# blocks of indicators (outer model)
+
+sem_blocks = list(c("Reg.hab.dens","Riv.net.disp.dist","Glac.lake.marine.dist","Time.since.glac"),
+                  c("Surface.area","Max.depth","Secchi.depth","Prop.shield.litho"),
+                  c("Clim.MWMT","Clim.MCMT","Clim.MSP","Clim.PAS"),
+                  c("Categ"))
+
+# non-metric scaling
+
+sem_scaling <- list(c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NOM"))
+
+# run NM-PLS-SEM
+
+set.seed(1)
+sem_pls_categ = plspm(sitemods, sem_path, sem_blocks, modes = sem_modes, scaling = sem_scaling, scaled = TRUE,
+                        scheme = "path", boot.val = TRUE, br = 1000)
+summary(sem_pls_categ)
+
+# capture categorical latent variable scores
+
+sem_pls_categ_scores <- sem_pls_categ$scores
+
+#### Module 1 ####
+
+# rows of the path matrix
+
+Connectivity = c(0,0,0,0)
+Habitat = c(0,0,0,0)
+Climate = c(0,0,0,0)
+Mod01 = c(1,1,1,0)
+
+# vector of modes A reflective and B composite
+
+sem_modes = c("B","B","B","B")
+
+# path matrix (inner model)
+
+sem_path = rbind(Connectivity, Habitat, Climate, Mod01)
+colnames(sem_path) = rownames(sem_path)
+
+# blocks of indicators (outer model)
+
+sem_blocks = list(c("Reg.hab.dens","Riv.net.disp.dist","Glac.lake.marine.dist","Time.since.glac"),
+                  c("Surface.area","Max.depth","Secchi.depth","Prop.shield.litho"),
+                  c("Clim.MWMT","Clim.MCMT","Clim.MSP","Clim.PAS"),
+                  c("Mod01"))
+
+# non-metric scaling
+
+sem_scaling <- list(c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NOM"))
+
+# run NM-PLS-SEM
+
+set.seed(1)
+sem_pls_mod01 = plspm(sitemods, sem_path, sem_blocks, modes = sem_modes, scaling = sem_scaling, scaled = TRUE,
+                      scheme = "path", boot.val = TRUE, br = 1000)
+summary(sem_pls_mod01)
+
+# capture mod 01 latent variable scores
+
+sem_pls_mod01_scores <- sem_pls_mod01$scores
+
+#### Module 2 ####
+
+# rows of the path matrix
+
+Connectivity = c(0,0,0,0)
+Habitat = c(0,0,0,0)
+Climate = c(0,0,0,0)
+Mod02 = c(1,1,1,0)
+
+# vector of modes A reflective and B composite
+
+sem_modes = c("B","B","B","B")
+
+# path matrix (inner model)
+
+sem_path = rbind(Connectivity, Habitat, Climate, Mod02)
+colnames(sem_path) = rownames(sem_path)
+
+# blocks of indicators (outer model)
+
+sem_blocks = list(c("Reg.hab.dens","Riv.net.disp.dist","Glac.lake.marine.dist","Time.since.glac"),
+                  c("Surface.area","Max.depth","Secchi.depth","Prop.shield.litho"),
+                  c("Clim.MWMT","Clim.MCMT","Clim.MSP","Clim.PAS"),
+                  c("Mod02"))
+
+# non-metric scaling
+
+sem_scaling <- list(c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NOM"))
+
+# run NM-PLS-SEM
+
+set.seed(1)
+sem_pls_mod02 = plspm(sitemods, sem_path, sem_blocks, modes = sem_modes, scaling = sem_scaling, scaled = TRUE,
+                      scheme = "path", boot.val = TRUE, br = 1000)
+summary(sem_pls_mod02)
+
+# capture mod 02 latent variable scores
+
+sem_pls_mod02_scores <- sem_pls_mod02$scores
+
+#### Module 3 ####
+
+# rows of the path matrix
+
+Connectivity = c(0,0,0,0)
+Habitat = c(0,0,0,0)
+Climate = c(0,0,0,0)
+Mod03 = c(1,1,1,0)
+
+# vector of modes A reflective and B composite
+
+sem_modes = c("B","B","B","B")
+
+# path matrix (inner model)
+
+sem_path = rbind(Connectivity, Habitat, Climate, Mod03)
+colnames(sem_path) = rownames(sem_path)
+
+# blocks of indicators (outer model)
+
+sem_blocks = list(c("Reg.hab.dens","Riv.net.disp.dist","Glac.lake.marine.dist","Time.since.glac"),
+                  c("Surface.area","Max.depth","Secchi.depth","Prop.shield.litho"),
+                  c("Clim.MWMT","Clim.MCMT","Clim.MSP","Clim.PAS"),
+                  c("Mod03"))
+
+# non-metric scaling
+
+sem_scaling <- list(c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NOM"))
+
+# run NM-PLS-SEM
+
+set.seed(1)
+sem_pls_mod03 = plspm(sitemods, sem_path, sem_blocks, modes = sem_modes, scaling = sem_scaling, scaled = TRUE,
+                      scheme = "path", boot.val = TRUE, br = 1000)
+summary(sem_pls_mod03)
+
+# capture mod 03 latent variable scores
+
+sem_pls_mod03_scores <- sem_pls_mod03$scores
+
+#### Module 4 ####
+
+# rows of the path matrix
+
+Connectivity = c(0,0,0,0)
+Habitat = c(0,0,0,0)
+Climate = c(0,0,0,0)
+Mod04 = c(1,1,1,0)
+
+# vector of modes A reflective and B composite
+
+sem_modes = c("B","B","B","B")
+
+# path matrix (inner model)
+
+sem_path = rbind(Connectivity, Habitat, Climate, Mod04)
+colnames(sem_path) = rownames(sem_path)
+
+# blocks of indicators (outer model)
+
+sem_blocks = list(c("Reg.hab.dens","Riv.net.disp.dist","Glac.lake.marine.dist","Time.since.glac"),
+                  c("Surface.area","Max.depth","Secchi.depth","Prop.shield.litho"),
+                  c("Clim.MWMT","Clim.MCMT","Clim.MSP","Clim.PAS"),
+                  c("Mod04"))
+
+# non-metric scaling
+
+sem_scaling <- list(c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NOM"))
+
+# run NM-PLS-SEM
+
+set.seed(1)
+sem_pls_mod04 = plspm(sitemods, sem_path, sem_blocks, modes = sem_modes, scaling = sem_scaling, scaled = TRUE,
+                      scheme = "path", boot.val = TRUE, br = 1000)
+summary(sem_pls_mod04)
+
+# capture mod 04 latent variable scores
+
+sem_pls_mod04_scores <- sem_pls_mod04$scores
+
+#### Merge NM-PLS-SEM results ####
+
+colnames(sem_pls_categ_scores) <- c("categ_connect", "categ_habitat", "categ_climate", "categ")
+colnames(sem_pls_mod01_scores) <- c("mod01_connect", "mod01_habitat", "mod01_climate", "mod01")
+colnames(sem_pls_mod02_scores) <- c("mod02_connect", "mod02_habitat", "mod02_climate", "mod02")
+colnames(sem_pls_mod03_scores) <- c("mod03_connect", "mod03_habitat", "mod03_climate", "mod03")
+colnames(sem_pls_mod04_scores) <- c("mod04_connect", "mod04_habitat", "mod04_climate", "mod04")
+
+sem_pls_scores<-as.data.frame(cbind(sem_pls_categ_scores, sem_pls_mod01_scores, sem_pls_mod02_scores, sem_pls_mod03_scores, sem_pls_mod04_scores))
+
+sem_pls_AB_scores <- merge(sem_pls_scores, sitemods, by="row.names")
+rownames(sem_pls_scores) <- sem_pls_scores$Row.names
+sem_pls_scores<-sem_pls_scores[,-1]
+
+##################
+# Multiple logistic regression and variation partitioning for modules
+##################
+
+#### Module 1 ####
+
+# ABC logistic regression
+
+glm_mod01_ABC <- glm(mod01 ~ mod01_connect + mod01_climate + mod01_habitat, family = binomial, data = sem_pls_scores)
+mod01_ABC_Tjur <- RsqGLM(glm_mod01_ABC)$Tjur
+confint(glm_mod01_ABC)
+AUC(glm_mod01_ABC)
+
+# AB logistic regression
+
+glm_mod01_AB <- glm(mod01 ~ mod01_connect + mod01_climate, family = binomial, data = sem_pls_scores)
+mod01_AB_Tjur <- RsqGLM(glm_mod01_AB)$Tjur
+confint(glm_mod01_AB)
+AUC(glm_mod01_AB)
+
+# AC logistic regression
+
+glm_mod01_AC <- glm(mod01 ~ mod01_connect + mod01_habitat, family = binomial, data = sem_pls_scores)
+mod01_AC_Tjur <- RsqGLM(glm_mod01_AC)$Tjur
+confint(glm_mod01_AC)
+AUC(glm_mod01_AC)
+
+# A logistic regression
+
+glm_mod01_A <- glm(mod01 ~ mod01_connect, family = binomial, data = sem_pls_scores)
+mod01_A_Tjur <- RsqGLM(glm_mod01_A)$Tjur
+confint(glm_mod01_A)
+AUC(glm_mod01_A)
+
+# B logistic regression
+
+glm_mod01_B <- glm(mod01 ~ mod01_climate, family = binomial, data = sem_pls_scores)
+mod01_B_Tjur <- RsqGLM(glm_mod01_B)$Tjur
+confint(glm_mod01_B)
+AUC(glm_mod01_B)
+
+# C logistic regression
+
+glm_mod01_C <- glm(mod01 ~ mod01_habitat, family = binomial, data = sem_pls_scores)
+mod01_C_Tjur <- RsqGLM(glm_mod01_C)$Tjur
+confint(glm_mod01_C)
+AUC(glm_mod01_C)
+
+# Variation partitioning
+
+vp_mod01_Tjur <- varPart(A = mod01_A_Tjur,
+                         B = mod01_B_Tjur,
+                         C = mod01_C_Tjur,
+                         AB = mod01_AB_Tjur,
+                         AC = mod01_AC_Tjur,
+                         BC = mod01_BC_Tjur,
+                         ABC = mod01_ABC_Tjur,
+                         A.name = "Connectivity",
+                         B.name = "Climate",
+                         C.name = "Habitat")
+
+# Euler plot
+
+vp_mod01_Tjur.euler <- euler(c("Connectivity" = round(if(vp_mod01_Tjur$Proportion[1] < 0) {0} else {vp_mod01_Tjur$Proportion[1]}, digits = 5), #a
+                               "Climate" = round(if(vp_mod01_Tjur$Proportion[2] < 0) {0} else {vp_mod01_Tjur$Proportion[2]}, digits = 5), #b
+                               "Habitat" = round(if(vp_mod01_Tjur$Proportion[3] < 0) {0} else {vp_mod01_Tjur$Proportion[3]}, digits = 5), #c
+                               "Connectivity&Climate"= round(if(vp_mod01_Tjur$Proportion[4] < 0) {0} else {vp_mod01_Tjur$Proportion[4]}, digits = 5), #d
+                               "Climate&Habitat" = round(if(vp_mod01_Tjur$Proportion[5] < 0) {0} else {vp_mod01_Tjur$Proportion[5]}, digits = 5), #e
+                               "Connectivity&Habitat" = round(if(vp_mod01_Tjur$Proportion[6] < 0) {0} else {vp_mod01_Tjur$Proportion[6]}, digits = 5), #f
+                               "Connectivity&Climate&Habitat" = round(if(vp_mod01_Tjur$Proportion[7] < 0) {0} else {vp_mod01_Tjur$Proportion[7]}, digits = 5)), #g
+                               shape="ellipse")
+
+vp_mod01_Tjur.euler.p <- plot(vp_mod01_Tjur.euler,
+                              fill=list(fill=c("#8dd3c7","#ffffb3","#bebada"), alpha=c(0.65,0.65,0.65)), 
+                              edges=list(lty=1:3, lex=2), quantities=list(cex=0.5), adjust_labels = TRUE)
+                              
+#### Module 2 ####
+
+# ABC logistic regression
+
+glm_mod02_ABC <- glm(mod02 ~ mod02_connect + mod02_climate + mod02_habitat, family = binomial, data = sem_pls_scores)
+mod02_ABC_Tjur <- RsqGLM(glm_mod02_ABC)$Tjur
+confint(glm_mod02_ABC)
+AUC(glm_mod02_ABC)
+
+# AB logistic regression
+
+glm_mod02_AB <- glm(mod02 ~ mod02_connect + mod02_climate, family = binomial, data = sem_pls_scores)
+mod02_AB_Tjur <- RsqGLM(glm_mod02_AB)$Tjur
+confint(glm_mod02_AB)
+AUC(glm_mod02_AB)
+
+# AC logistic regression
+
+glm_mod02_AC <- glm(mod02 ~ mod02_connect + mod02_habitat, family = binomial, data = sem_pls_scores)
+mod02_AC_Tjur <- RsqGLM(glm_mod02_AC)$Tjur
+confint(glm_mod02_AC)
+AUC(glm_mod02_AC)
+
+# A logistic regression
+
+glm_mod02_A <- glm(mod02 ~ mod02_connect, family = binomial, data = sem_pls_scores)
+mod02_A_Tjur <- RsqGLM(glm_mod02_A)$Tjur
+confint(glm_mod02_A)
+AUC(glm_mod02_A)
+
+# B logistic regression
+
+glm_mod02_B <- glm(mod02 ~ mod02_climate, family = binomial, data = sem_pls_scores)
+mod02_B_Tjur <- RsqGLM(glm_mod02_B)$Tjur
+confint(glm_mod02_B)
+AUC(glm_mod02_B)
+
+# C logistic regression
+
+glm_mod02_C <- glm(mod02 ~ mod02_habitat, family = binomial, data = sem_pls_scores)
+mod02_C_Tjur <- RsqGLM(glm_mod02_C)$Tjur
+confint(glm_mod02_C)
+AUC(glm_mod02_C)
+
+# Variation partitioning
+
+vp_mod02_Tjur <- varPart(A = mod02_A_Tjur,
+                         B = mod02_B_Tjur,
+                         C = mod02_C_Tjur,
+                         AB = mod02_AB_Tjur,
+                         AC = mod02_AC_Tjur,
+                         BC = mod02_BC_Tjur,
+                         ABC = mod02_ABC_Tjur,
+                         A.name = "Connectivity",
+                         B.name = "Climate",
+                         C.name = "Habitat")
+
+# Euler plot
+
+vp_mod02_Tjur.euler <- euler(c("Connectivity" = round(if(vp_mod02_Tjur$Proportion[1] < 0) {0} else {vp_mod02_Tjur$Proportion[1]}, digits = 5), #a
+                               "Climate" = round(if(vp_mod02_Tjur$Proportion[2] < 0) {0} else {vp_mod02_Tjur$Proportion[2]}, digits = 5), #b
+                               "Habitat" = round(if(vp_mod02_Tjur$Proportion[3] < 0) {0} else {vp_mod02_Tjur$Proportion[3]}, digits = 5), #c
+                               "Connectivity&Climate"= round(if(vp_mod02_Tjur$Proportion[4] < 0) {0} else {vp_mod02_Tjur$Proportion[4]}, digits = 5), #d
+                               "Climate&Habitat" = round(if(vp_mod02_Tjur$Proportion[5] < 0) {0} else {vp_mod02_Tjur$Proportion[5]}, digits = 5), #e
+                               "Connectivity&Habitat" = round(if(vp_mod02_Tjur$Proportion[6] < 0) {0} else {vp_mod02_Tjur$Proportion[6]}, digits = 5), #f
+                               "Connectivity&Climate&Habitat" = round(if(vp_mod02_Tjur$Proportion[7] < 0) {0} else {vp_mod02_Tjur$Proportion[7]}, digits = 5)), #g
+                               shape="ellipse")
+
+vp_mod02_Tjur.euler.p <- plot(vp_mod02_Tjur.euler,
+                              fill=list(fill=c("#8dd3c7","#ffffb3","#bebada"), alpha=c(0.65,0.65,0.65)), 
+                              edges=list(lty=1:3, lex=2), quantities=list(cex=0.5), adjust_labels = TRUE)
+                              
+#### Module 3 ####
+
+# ABC logistic regression
+
+glm_mod03_ABC <- glm(mod03 ~ mod03_connect + mod03_climate + mod03_habitat, family = binomial, data = sem_pls_scores)
+mod03_ABC_Tjur <- RsqGLM(glm_mod03_ABC)$Tjur
+confint(glm_mod03_ABC)
+AUC(glm_mod03_ABC)
+
+# AB logistic regression
+
+glm_mod03_AB <- glm(mod03 ~ mod03_connect + mod03_climate, family = binomial, data = sem_pls_scores)
+mod03_AB_Tjur <- RsqGLM(glm_mod03_AB)$Tjur
+confint(glm_mod03_AB)
+AUC(glm_mod03_AB)
+
+# AC logistic regression
+
+glm_mod03_AC <- glm(mod03 ~ mod03_connect + mod03_habitat, family = binomial, data = sem_pls_scores)
+mod03_AC_Tjur <- RsqGLM(glm_mod03_AC)$Tjur
+confint(glm_mod03_AC)
+AUC(glm_mod03_AC)
+
+# A logistic regression
+
+glm_mod03_A <- glm(mod03 ~ mod03_connect, family = binomial, data = sem_pls_scores)
+mod03_A_Tjur <- RsqGLM(glm_mod03_A)$Tjur
+confint(glm_mod03_A)
+AUC(glm_mod03_A)
+
+# B logistic regression
+
+glm_mod03_B <- glm(mod03 ~ mod03_climate, family = binomial, data = sem_pls_scores)
+mod03_B_Tjur <- RsqGLM(glm_mod03_B)$Tjur
+confint(glm_mod03_B)
+AUC(glm_mod03_B)
+
+# C logistic regression
+
+glm_mod03_C <- glm(mod03 ~ mod03_habitat, family = binomial, data = sem_pls_scores)
+mod03_C_Tjur <- RsqGLM(glm_mod03_C)$Tjur
+confint(glm_mod03_C)
+AUC(glm_mod03_C)
+
+# Variation partitioning
+
+vp_mod03_Tjur <- varPart(A = mod03_A_Tjur,
+                         B = mod03_B_Tjur,
+                         C = mod03_C_Tjur,
+                         AB = mod03_AB_Tjur,
+                         AC = mod03_AC_Tjur,
+                         BC = mod03_BC_Tjur,
+                         ABC = mod03_ABC_Tjur,
+                         A.name = "Connectivity",
+                         B.name = "Climate",
+                         C.name = "Habitat")
+
+# Euler plot
+
+vp_mod03_Tjur.euler <- euler(c("Connectivity" = round(if(vp_mod03_Tjur$Proportion[1] < 0) {0} else {vp_mod03_Tjur$Proportion[1]}, digits = 5), #a
+                               "Climate" = round(if(vp_mod03_Tjur$Proportion[2] < 0) {0} else {vp_mod03_Tjur$Proportion[2]}, digits = 5), #b
+                               "Habitat" = round(if(vp_mod03_Tjur$Proportion[3] < 0) {0} else {vp_mod03_Tjur$Proportion[3]}, digits = 5), #c
+                               "Connectivity&Climate"= round(if(vp_mod03_Tjur$Proportion[4] < 0) {0} else {vp_mod03_Tjur$Proportion[4]}, digits = 5), #d
+                               "Climate&Habitat" = round(if(vp_mod03_Tjur$Proportion[5] < 0) {0} else {vp_mod03_Tjur$Proportion[5]}, digits = 5), #e
+                               "Connectivity&Habitat" = round(if(vp_mod03_Tjur$Proportion[6] < 0) {0} else {vp_mod03_Tjur$Proportion[6]}, digits = 5), #f
+                               "Connectivity&Climate&Habitat" = round(if(vp_mod03_Tjur$Proportion[7] < 0) {0} else {vp_mod03_Tjur$Proportion[7]}, digits = 5)), #g
+                               shape="ellipse")
+
+vp_mod03_Tjur.euler.p <- plot(vp_mod03_Tjur.euler,
+                              fill=list(fill=c("#8dd3c7","#ffffb3","#bebada"), alpha=c(0.65,0.65,0.65)), 
+                              edges=list(lty=1:3, lex=2), quantities=list(cex=0.5), adjust_labels = TRUE)
+                                                            
+#### Module 4 ####
+
+# ABC logistic regression
+
+glm_mod04_ABC <- glm(mod04 ~ mod04_connect + mod04_climate + mod04_habitat, family = binomial, data = sem_pls_scores)
+mod04_ABC_Tjur <- RsqGLM(glm_mod04_ABC)$Tjur
+confint(glm_mod04_ABC)
+AUC(glm_mod04_ABC)
+
+# AB logistic regression
+
+glm_mod04_AB <- glm(mod04 ~ mod04_connect + mod04_climate, family = binomial, data = sem_pls_scores)
+mod04_AB_Tjur <- RsqGLM(glm_mod04_AB)$Tjur
+confint(glm_mod04_AB)
+AUC(glm_mod04_AB)
+
+# AC logistic regression
+
+glm_mod04_AC <- glm(mod04 ~ mod04_connect + mod04_habitat, family = binomial, data = sem_pls_scores)
+mod04_AC_Tjur <- RsqGLM(glm_mod04_AC)$Tjur
+confint(glm_mod04_AC)
+AUC(glm_mod04_AC)
+
+# A logistic regression
+
+glm_mod04_A <- glm(mod04 ~ mod04_connect, family = binomial, data = sem_pls_scores)
+mod04_A_Tjur <- RsqGLM(glm_mod04_A)$Tjur
+confint(glm_mod04_A)
+AUC(glm_mod04_A)
+
+# B logistic regression
+
+glm_mod04_B <- glm(mod04 ~ mod04_climate, family = binomial, data = sem_pls_scores)
+mod04_B_Tjur <- RsqGLM(glm_mod04_B)$Tjur
+confint(glm_mod04_B)
+AUC(glm_mod04_B)
+
+# C logistic regression
+
+glm_mod04_C <- glm(mod04 ~ mod04_habitat, family = binomial, data = sem_pls_scores)
+mod04_C_Tjur <- RsqGLM(glm_mod04_C)$Tjur
+confint(glm_mod04_C)
+AUC(glm_mod04_C)
+
+# Variation partitioning
+
+vp_mod04_Tjur <- varPart(A = mod04_A_Tjur,
+                         B = mod04_B_Tjur,
+                         C = mod04_C_Tjur,
+                         AB = mod04_AB_Tjur,
+                         AC = mod04_AC_Tjur,
+                         BC = mod04_BC_Tjur,
+                         ABC = mod04_ABC_Tjur,
+                         A.name = "Connectivity",
+                         B.name = "Climate",
+                         C.name = "Habitat")
+
+# Euler plot
+
+vp_mod04_Tjur.euler <- euler(c("Connectivity" = round(if(vp_mod04_Tjur$Proportion[1] < 0) {0} else {vp_mod04_Tjur$Proportion[1]}, digits = 5), #a
+                               "Climate" = round(if(vp_mod04_Tjur$Proportion[2] < 0) {0} else {vp_mod04_Tjur$Proportion[2]}, digits = 5), #b
+                               "Habitat" = round(if(vp_mod04_Tjur$Proportion[3] < 0) {0} else {vp_mod04_Tjur$Proportion[3]}, digits = 5), #c
+                               "Connectivity&Climate"= round(if(vp_mod04_Tjur$Proportion[4] < 0) {0} else {vp_mod04_Tjur$Proportion[4]}, digits = 5), #d
+                               "Climate&Habitat" = round(if(vp_mod04_Tjur$Proportion[5] < 0) {0} else {vp_mod04_Tjur$Proportion[5]}, digits = 5), #e
+                               "Connectivity&Habitat" = round(if(vp_mod04_Tjur$Proportion[6] < 0) {0} else {vp_mod04_Tjur$Proportion[6]}, digits = 5), #f
+                               "Connectivity&Climate&Habitat" = round(if(vp_mod04_Tjur$Proportion[7] < 0) {0} else {vp_mod04_Tjur$Proportion[7]}, digits = 5)), #g
+                               shape="ellipse")
+
+vp_mod04_Tjur.euler.p <- plot(vp_mod04_Tjur.euler,
+                              fill=list(fill=c("#8dd3c7","#ffffb3","#bebada"), alpha=c(0.65,0.65,0.65)), 
+                              edges=list(lty=1:3, lex=2), quantities=list(cex=0.5), adjust_labels = TRUE)
+                              
+#### Plot Euler grid ####
+
+grid.arrange(grobTree(vp_mod01_Tjur.euler.p),grobTree(vp_mod02_Tjur.euler.p),grobTree(vp_mod03_Tjur.euler.p),grobTree(vp_mod04_Tjur.euler.p), ncol=4, 
+             widths = c(0.657,0.467,1.006,0.826)) #widths used to scale plots according to xlim from 'euler' objects
+
+
+
+#...............................................................................................#
