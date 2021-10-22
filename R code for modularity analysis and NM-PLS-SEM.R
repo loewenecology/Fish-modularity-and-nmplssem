@@ -32,7 +32,7 @@ library(dplyr)
 ##################
 
 DRYAD_speciesbysite <- read.table("DRYAD_speciesbysite.csv", header = T, sep = ",", row.names = 1)  # file available from DRYAD (doi)
-speciesbysite <- DRYAD_speciesbysite[5:94] # remove location data to create site by species matrix
+speciesbysite <- DRYAD_speciesbysite[5:94] # remove location data to create site by species data frame
 
 ##################
 # Modularity analysis 
