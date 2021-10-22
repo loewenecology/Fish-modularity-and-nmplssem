@@ -1,0 +1,1079 @@
+#...............................................................................................#
+#...........Bioregions are predominately climatic for fishes of northern lakes..................#
+#...............................................................................................#
+
+#...............................................................................................#
+#...........Author of the script: Charlie Loewen................................................#
+#...........Date latest modifications: 2021-09-30...............................................#
+#...............................................................................................#
+
+#################################################################################################
+########### For conducting bipartite network modularity analysis and analyzing 
+########### derived modules by non-metric partial least-squares structural equation models 
+########### paired with multiple logistic regression under a variation partitioning framework
+#################################################################################################
+
+##################
+# Clear any variables from the R environment
+##################
+
+rm(list=ls())
+while(dev.cur() != 1){ dev.off(dev.cur()) }
+
+##################
+# Load R packages
+##################
+
+library(bipartite)
+library(dplyr)
+
+##################
+# Load data in R environment
+##################
+
+DRYAD_speciesbysite <- read.table("DRYAD_speciesbysite.csv", header = T, sep = ",", row.names = 1)  # file available from DRYAD (doi)
+speciesbysite <- DRYAD_speciesbysite[5:94] # remove location data to create site by species matrix
+
+##################
+# Modularity analysis 
+##################
+
+#### Primary modularity analysis ####
+
+set.seed(8)  # Best performing seed of 1-10 (based on modularity Q value) 
+dirt.lpa.b.plus.net <- computeModules(speciesbysite, method = "Beckett", forceLPA=FALSE)
+dirt.lpa.b.plus.net@likelihood  # Barbers modularity Q = 0.3324972 (4 modules)
+
+# Null model analysis
+
+func <- function(x) computeModules(x)@likelihood
+clus <- makeCluster(20)  # set number of processors for parallel computing
+clusterEvalQ(clus, library(bipartite))
+nm <- replicate(20, simulate(vegan::nullmodel(speciesbysite, "curveball"), 5, thin = 1000, burnin = 1000), simplify = FALSE)
+nm <- smbind(nm, MARGIN = 3)  # sets 100 simulations across 20 chains
+set.seed(8)
+dirt.lpa.b.plus.net.8.curveball.chains <- oecosimu(comm = nm, nestfun = func, alternative = "greater", statistic = "likelihood", parallel = clus)
+dirt.lpa.b.plus.net.8.curveball.chains[["oecosimu"]][["pval"]]
+stopCluster(clus)
+
+# Computes participation coefficient (c)  
+
+dirt.lpa.b.plus.net.cz.lower <- czvalues(dirt.lpa.b.plus.net, level = "lower")  # site-level calculation
+
+# Site data extraction 
+
+dirt.lpa.b.plus.net.list <- listModuleInformation(dirt.lpa.b.plus.net)
+
+site.mod.1 <- dirt.lpa.b.plus.net.list[[2]][[1]][[1]]
+site.mod.1.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net@moduleWeb) %in% site.mod.1, 1, 0))
+site.mod.2 <- dirt.lpa.b.plus.net.list[[2]][[2]][[1]]
+site.mod.2.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net@moduleWeb) %in% site.mod.2, 1, 0))
+site.mod.3 <- dirt.lpa.b.plus.net.list[[2]][[3]][[1]]
+site.mod.3.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net@moduleWeb) %in% site.mod.3, 1, 0))
+site.mod.4 <- dirt.lpa.b.plus.net.list[[2]][[4]][[1]]
+site.mod.4.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net@moduleWeb) %in% site.mod.4, 1, 0))
+
+site.mods <- cbind(site.mod.1.vector, site.mod.2.vector, site.mod.3.vector, site.mod.4.vector)
+rownames(site.mods)<-rownames(dirt.lpa.b.plus.net@moduleWeb)
+colnames(site.mods)<-c("mod01", "mod02", "mod03", "mod04")
+
+site.mods <- merge(site.mods, dirt.lpa.b.plus.net.cz.lower$c, by = "row.names")
+rownames(site.mods) <- site.mods$Row.names
+site.mods <- site.mods[, -1]
+site.mods <- merge(site.mods, dirt.lpa.b.plus.net.cz.lower$z, by = "row.names")
+rownames(site.mods) <- site.mods$Row.names
+site.mods <- site.mods[, -1]
+
+colnames(site.mods) <- c("mod01", "mod02", "mod03", "mod04", "c", "z")
+
+write.csv(site.mods, file = "site.mods.csv")
+
+# Sp data extraction 
+
+sp.mod.1 <- dirt.lpa.b.plus.net.list[[2]][[1]][[2]]
+sp.mod.1.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net@moduleWeb) %in% sp.mod.1, 1, 0))
+sp.mod.2 <- dirt.lpa.b.plus.net.list[[2]][[2]][[2]]
+sp.mod.2.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net@moduleWeb) %in% sp.mod.2, 1, 0))
+sp.mod.3 <- dirt.lpa.b.plus.net.list[[2]][[3]][[2]]
+sp.mod.3.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net@moduleWeb) %in% sp.mod.3, 1, 0))
+sp.mod.4 <- dirt.lpa.b.plus.net.list[[2]][[4]][[2]]
+sp.mod.4.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net@moduleWeb) %in% sp.mod.4, 1, 0))
+
+sp.mods <- cbind(sp.mod.1.vector, sp.mod.2.vector, sp.mod.3.vector, sp.mod.4.vector)
+rownames(sp.mods) <- colnames(dirt.lpa.b.plus.net@moduleWeb)
+colnames(sp.mods) <- c("mod01", "mod02", "mod03", "mod04")
+
+write.csv(sp.mods, file = "sp.mods.csv")
+
+#### Sub-modularity analysis of module 1 ####
+
+speciesbysite.mod1 <- speciesbysite[, (colnames(speciesbysite) %in% dirt.lpa.b.plus.net.list[[2]][[1]][[2]])]
+speciesbysite.mod1 <- speciesbysite.mod1[(rownames(speciesbysite.mod1) %in% dirt.lpa.b.plus.net.list[[2]][[1]][[1]]), ]
+
+set.seed(10)  # best performing seed of 1-10 (based on modularity Q value)
+dirt.lpa.b.plus.net.mod1 <- computeModules(speciesbysite.mod1, method = "Beckett", forceLPA=FALSE)
+dirt.lpa.b.plus.net.mod1@likelihood  # Barbers modularity Q = 0.181355 (5 modules)
+
+# Null model analysis
+
+func <- function(x) computeModules(x)@likelihood
+clus <- makeCluster(20)  # set number of processors for parallel computing
+clusterEvalQ(clus, library(bipartite))
+nm <- replicate(20, simulate(vegan::nullmodel(speciesbysite.mod1, "curveball"), 5, thin = 1000, burnin = 1000), simplify = FALSE)
+nm <- smbind(nm, MARGIN = 3)  # sets 100 simulations across 20 chains
+set.seed(10)
+dirt.lpa.b.plus.net.mod1.curveball.chains <- oecosimu(comm = nm, nestfun = func, alternative = "greater", statistic = "likelihood", parallel = clus)
+dirt.lpa.b.plus.net.mod1.curveball.chains[["oecosimu"]][["pval"]]
+stopCluster(clus)
+
+# Computes participation coefficient (c)  
+
+dirt.lpa.b.plus.net.mod1.cz.lower <- czvalues(dirt.lpa.b.plus.net.mod1, level = "lower")  # site-level calculation
+
+# Site data extraction 
+
+dirt.lpa.b.plus.net.mod1.list <- listModuleInformation(dirt.lpa.b.plus.net.mod1)
+
+site.mod1.1 <- dirt.lpa.b.plus.net.mod1.list[[2]][[1]][[1]]
+site.mod1.1.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod1@moduleWeb) %in% site.mod1.1, 1, 0))
+site.mod1.2 <- dirt.lpa.b.plus.net.mod1.list[[2]][[2]][[1]]
+site.mod1.2.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod1@moduleWeb) %in% site.mod1.2, 1, 0))
+site.mod1.3 <- dirt.lpa.b.plus.net.mod1.list[[2]][[3]][[1]]
+site.mod1.3.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod1@moduleWeb) %in% site.mod1.3, 1, 0))
+site.mod1.4 <- dirt.lpa.b.plus.net.mod1.list[[2]][[4]][[1]]
+site.mod1.4.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod1@moduleWeb) %in% site.mod1.4, 1, 0))
+site.mod1.5 <- dirt.lpa.b.plus.net.mod1.list[[2]][[5]][[1]]
+site.mod1.5.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod1@moduleWeb) %in% site.mod1.5, 1, 0))
+
+site.mods1 <- cbind(site.mod1.1.vector, site.mod1.2.vector, site.mod1.3.vector, site.mod1.4.vector, site.mod1.5.vector)
+rownames(site.mods1) <- rownames(dirt.lpa.b.plus.net.mod1@moduleWeb)
+colnames(site.mods1) <- c("mod01_01", "mod01_02", "mod01_03", "mod01_04", "mod01_05")
+
+site.mods1 <- merge(site.mods1, dirt.lpa.b.plus.net.mod1.cz.lower$c, by = "row.names")
+rownames(site.mods1) <- site.mods1$Row.names
+site.mods1<-site.mods1[, -1]
+site.mods1 <- merge(site.mods1, dirt.lpa.b.plus.net.mod1.cz.lower$z, by = "row.names")
+rownames(site.mods1) <- site.mods1$Row.names
+site.mods1 <- site.mods1[, -1]
+
+colnames(site.mods1) <- c("mod01_01", "mod01_02", "mod01_03", "mod01_04", "mod01_05", "c", "z")
+
+write.csv(site.mods1, file = "site.mods1.csv")
+
+# Sp data extraction 
+
+sp.mod1.1 < -dirt.lpa.b.plus.net.mod1.list[[2]][[1]][[2]]
+sp.mod1.1.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod1@moduleWeb) %in% sp.mod1.1, 1, 0))
+sp.mod1.2 <- dirt.lpa.b.plus.net.mod1.list[[2]][[2]][[2]]
+sp.mod1.2.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod1@moduleWeb) %in% sp.mod1.2, 1, 0))
+sp.mod1.3 <- dirt.lpa.b.plus.net.mod1.list[[2]][[3]][[2]]
+sp.mod1.3.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod1@moduleWeb) %in% sp.mod1.3, 1, 0))
+sp.mod1.4 <- dirt.lpa.b.plus.net.mod1.list[[2]][[4]][[2]]
+sp.mod1.4.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod1@moduleWeb) %in% sp.mod1.4, 1, 0))
+sp.mod1.5 <- dirt.lpa.b.plus.net.mod1.list[[2]][[5]][[2]]
+sp.mod1.5.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod1@moduleWeb) %in% sp.mod1.5, 1, 0))
+
+sp.mods1 <- cbind(sp.mod1.1.vector, sp.mod1.2.vector, sp.mod1.3.vector, sp.mod1.4.vector, sp.mod1.5.vector)
+rownames(sp.mods1) <- colnames(dirt.lpa.b.plus.net.mod1@moduleWeb)
+colnames(sp.mods1) <- c("mod01_01", "mod01_02", "mod01_03", "mod01_04", "mod01_05")
+
+write.csv(sp.mods1, file = "sp.mods1.csv")
+
+#### Sub-modularity analysis of module 2 ####
+
+speciesbysite.mod2 <- speciesbysite[, (colnames(speciesbysite) %in% dirt.lpa.b.plus.net.list[[2]][[2]][[2]])]
+speciesbysite.mod2 <- speciesbysite.mod2[(rownames(speciesbysite.mod2) %in% dirt.lpa.b.plus.net.list[[2]][[2]][[1]]), ]
+
+set.seed(10)  # best performing seed of 1-10 (based on modularity Q value)
+dirt.lpa.b.plus.net.mod2 <- computeModules(speciesbysite.mod2, method = "Beckett", forceLPA = FALSE)
+dirt.lpa.b.plus.net.mod2@likelihood  # Barbers modularity Q = 0.3025909 (7 modules)
+
+# Null model analysis
+
+func <- function(x) computeModules(x)@likelihood
+clus <- makeCluster(20)  # set number of processors for parallel computing
+clusterEvalQ(clus, library(bipartite))
+nm <- replicate(20, simulate(vegan::nullmodel(speciesbysite.mod2, "curveball"), 5, thin = 1000, burnin = 1000), simplify = FALSE)
+nm <- smbind(nm, MARGIN = 3)  # sets 100 simulations across 20 chains
+set.seed(10)
+dirt.lpa.b.plus.net.mod2.curveball.chains <- oecosimu(comm = nm, nestfun = func, alternative = "greater", statistic = "likelihood", parallel = clus)
+dirt.lpa.b.plus.net.mod2.curveball.chains[["oecosimu"]][["pval"]]
+stopCluster(clus)
+
+# Computes participation coefficient (c)  
+
+dirt.lpa.b.plus.net.mod2.cz.lower <- czvalues(dirt.lpa.b.plus.net.mod2, level = "lower")  # site-level calculation
+
+# Site data extraction 
+
+dirt.lpa.b.plus.net.mod2.list <- listModuleInformation(dirt.lpa.b.plus.net.mod2)
+
+site.mod2.1 <- dirt.lpa.b.plus.net.mod2.list[[2]][[1]][[1]]
+site.mod2.1.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% site.mod2.1, 1, 0))
+site.mod2.2 <- dirt.lpa.b.plus.net.mod2.list[[2]][[2]][[1]]
+site.mod2.2.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% site.mod2.2, 1, 0))
+site.mod2.3 <- dirt.lpa.b.plus.net.mod2.list[[2]][[3]][[1]]
+site.mod2.3.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% site.mod2.3, 1, 0))
+site.mod2.4 <- dirt.lpa.b.plus.net.mod2.list[[2]][[4]][[1]]
+site.mod2.4.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% site.mod2.4, 1, 0))
+site.mod2.5 <- dirt.lpa.b.plus.net.mod2.list[[2]][[5]][[1]]
+site.mod2.5.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% site.mod2.5, 1, 0))
+site.mod2.6 <- dirt.lpa.b.plus.net.mod2.list[[2]][[6]][[1]]
+site.mod2.6.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% site.mod2.6, 1, 0))
+site.mod2.7 <- dirt.lpa.b.plus.net.mod2.list[[2]][[7]][[1]]
+site.mod2.7.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% site.mod2.7, 1, 0))
+
+site.mods2 <- cbind(site.mod2.1.vector, site.mod2.2.vector, site.mod2.3.vector, site.mod2.4.vector, site.mod2.5.vector, site.mod2.6.vector, site.mod2.7.vector)
+rownames(site.mods2) <- rownames(dirt.lpa.b.plus.net.mod2@moduleWeb)
+colnames(site.mods2) <- c("mod02_01", "mod02_02", "mod02_03", "mod02_04", "mod02_05", "mod02_06", "mod02_07")
+
+site.mods2 <- merge(site.mods2, dirt.lpa.b.plus.net.mod2.cz.lower$c, by = "row.names")
+rownames(site.mods2) <- site.mods2$Row.names
+site.mods2 <- site.mods2[, -1]
+site.mods2 <- merge(site.mods2, dirt.lpa.b.plus.net.mod2.cz.lower$z, by = "row.names")
+rownames(site.mods2) <- site.mods2$Row.names
+site.mods2 <- site.mods2[, -1]
+
+colnames(site.mods2) <- c("mod02_01", "mod02_02", "mod02_03", "mod02_04", "mod02_05", "mod02_06", "mod02_07", "c", "z")
+
+write.csv(site.mods2, file = "site.mods2.csv")
+
+# Sp data extraction 
+
+sp.mod2.1 <- dirt.lpa.b.plus.net.mod2.list[[2]][[1]][[2]]
+sp.mod2.1.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% sp.mod2.1, 1, 0))
+sp.mod2.2 <- dirt.lpa.b.plus.net.mod2.list[[2]][[2]][[2]]
+sp.mod2.2.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% sp.mod2.2, 1, 0))
+sp.mod2.3 <- dirt.lpa.b.plus.net.mod2.list[[2]][[3]][[2]]
+sp.mod2.3.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% sp.mod2.3, 1, 0))
+sp.mod2.4 <- dirt.lpa.b.plus.net.mod2.list[[2]][[4]][[2]]
+sp.mod2.4.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% sp.mod2.4, 1, 0))
+sp.mod2.5 <- dirt.lpa.b.plus.net.mod2.list[[2]][[5]][[2]]
+sp.mod2.5.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% sp.mod2.5, 1, 0))
+sp.mod2.6 <- dirt.lpa.b.plus.net.mod2.list[[2]][[6]][[2]]
+sp.mod2.6.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% sp.mod2.6, 1, 0))
+sp.mod2.7 <- dirt.lpa.b.plus.net.mod2.list[[2]][[7]][[2]]
+sp.mod2.7.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod2@moduleWeb) %in% sp.mod2.7, 1, 0))
+
+sp.mods2 <- cbind(sp.mod2.1.vector, sp.mod2.2.vector, sp.mod2.3.vector, sp.mod2.4.vector, sp.mod2.5.vector, sp.mod2.6.vector, sp.mod2.7.vector)
+rownames(sp.mods2) <- colnames(dirt.lpa.b.plus.net.mod2@moduleWeb)
+colnames(sp.mods2) <- c("mod02_01", "mod02_02", "mod02_03", "mod02_04", "mod02_05", "mod02_06", "mod02_07")
+
+write.csv(sp.mods2, file = "sp.mods2.csv")
+
+#### Sub-modularity analysis of module 3 ####
+
+speciesbysite.mod3 <- speciesbysite[, (colnames(speciesbysite) %in% dirt.lpa.b.plus.net.list[[2]][[3]][[2]])]
+speciesbysite.mod3 <- speciesbysite.mod3[(rownames(speciesbysite.mod3) %in% dirt.lpa.b.plus.net.list[[2]][[3]][[1]]), ]
+
+set.seed(4)  # best performing seed of 1-10 (based on modularity Q value)
+dirt.lpa.b.plus.net.mod3 <- computeModules(speciesbysite.mod3, method = "Beckett", forceLPA = FALSE)
+dirt.lpa.b.plus.net.mod3@likelihood  # Barbers modularity Q = 0.2392342 (7 modules)
+
+# Null model analysis
+
+func <- function(x) computeModules(x)@likelihood
+clus <- makeCluster(20)  # set number of processors for parallel computing
+clusterEvalQ(clus, library(bipartite))
+nm <- replicate(20, simulate(vegan::nullmodel(speciesbysite.mod3, "curveball"), 5, thin = 1000, burnin = 1000), simplify = FALSE)
+nm <- smbind(nm, MARGIN = 3)  # sets 100 simulations across 20 chains
+set.seed(4)
+dirt.lpa.b.plus.net.mod3.curveball.chains <- oecosimu(comm = nm, nestfun = func, alternative = "greater", statistic = "likelihood", parallel = clus)
+dirt.lpa.b.plus.net.mod3.curveball.chains[["oecosimu"]][["pval"]]
+stopCluster(clus)
+
+# Computes participation coefficient (c)  
+
+dirt.lpa.b.plus.net.mod3.cz.lower <- czvalues(dirt.lpa.b.plus.net.mod3, level = "lower")  # site-level calculation
+
+# Site data extraction 
+
+dirt.lpa.b.plus.net.mod3.list <- listModuleInformation(dirt.lpa.b.plus.net.mod3)
+
+site.mod3.1 <- dirt.lpa.b.plus.net.mod3.list[[2]][[1]][[1]]
+site.mod3.1.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% site.mod3.1, 1, 0))
+site.mod3.2 <- dirt.lpa.b.plus.net.mod3.list[[2]][[2]][[1]]
+site.mod3.2.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% site.mod3.2, 1, 0))
+site.mod3.3 <- dirt.lpa.b.plus.net.mod3.list[[2]][[3]][[1]]
+site.mod3.3.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% site.mod3.3, 1, 0))
+site.mod3.4 <- dirt.lpa.b.plus.net.mod3.list[[2]][[4]][[1]]
+site.mod3.4.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% site.mod3.4, 1, 0))
+site.mod3.5 <- dirt.lpa.b.plus.net.mod3.list[[2]][[5]][[1]]
+site.mod3.5.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% site.mod3.5, 1, 0))
+site.mod3.6 <- dirt.lpa.b.plus.net.mod3.list[[2]][[6]][[1]]
+site.mod3.6.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% site.mod3.6, 1, 0))
+site.mod3.7 <- dirt.lpa.b.plus.net.mod3.list[[2]][[7]][[1]]
+site.mod3.7.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% site.mod3.7, 1, 0))
+
+site.mods3 <- cbind(site.mod3.1.vector, site.mod3.2.vector, site.mod3.3.vector, site.mod3.4.vector, site.mod3.5.vector, site.mod3.6.vector, site.mod3.7.vector)
+rownames(site.mods3) <- rownames(dirt.lpa.b.plus.net.mod3@moduleWeb)
+colnames(site.mods3) <- c("mod03_01", "mod03_02", "mod03_03", "mod03_04", "mod03_05", "mod03_06", "mod03_07")
+
+site.mods3 <- merge(site.mods3, dirt.lpa.b.plus.net.mod3.cz.lower$c, by = "row.names")
+rownames(site.mods3) <- site.mods3$Row.names
+site.mods3 <- site.mods3[, -1]
+site.mods3 <- merge(site.mods3, dirt.lpa.b.plus.net.mod3.cz.lower$z, by = "row.names")
+rownames(site.mods3) <- site.mods3$Row.names
+site.mods3 <- site.mods3[, -1]
+
+colnames(site.mods3) <- c("mod03_01", "mod03_02", "mod03_03", "mod03_04", "mod03_05", "mod03_06", "mod03_07", "c", "z")
+
+write.csv(site.mods3, file = "site.mods3.csv")
+
+# Sp data extraction 
+
+sp.mod3.1 <- dirt.lpa.b.plus.net.mod3.list[[2]][[1]][[2]]
+sp.mod3.1.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% sp.mod3.1, 1, 0))
+sp.mod3.2 <- dirt.lpa.b.plus.net.mod3.list[[2]][[2]][[2]]
+sp.mod3.2.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% sp.mod3.2, 1, 0))
+sp.mod3.3 <- dirt.lpa.b.plus.net.mod3.list[[2]][[3]][[2]]
+sp.mod3.3.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% sp.mod3.3, 1, 0))
+sp.mod3.4 <- dirt.lpa.b.plus.net.mod3.list[[2]][[4]][[2]]
+sp.mod3.4.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% sp.mod3.4, 1, 0))
+sp.mod3.5 <- dirt.lpa.b.plus.net.mod3.list[[2]][[5]][[2]]
+sp.mod3.5.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% sp.mod3.5, 1, 0))
+sp.mod3.6 <- dirt.lpa.b.plus.net.mod3.list[[2]][[6]][[2]]
+sp.mod3.6.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% sp.mod3.6, 1, 0))
+sp.mod3.7 <- dirt.lpa.b.plus.net.mod3.list[[2]][[7]][[2]]
+sp.mod3.7.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod3@moduleWeb) %in% sp.mod3.7, 1, 0))
+
+sp.mods3 <- cbind(sp.mod3.1.vector, sp.mod3.2.vector, sp.mod3.3.vector, sp.mod3.4.vector, sp.mod3.5.vector, sp.mod3.6.vector, sp.mod3.7.vector)
+rownames(sp.mods3) <- colnames(dirt.lpa.b.plus.net.mod3@moduleWeb)
+colnames(sp.mods3) <- c("mod03_01", "mod03_02", "mod03_03", "mod03_04", "mod03_05", "mod03_06", "mod03_07")
+
+write.csv(sp.mods3, file = "sp.mods3.csv")
+
+#### Sub-modularity analysis of module 4 ####
+
+speciesbysite.mod4 <- speciesbysite[, (colnames(speciesbysite) %in% dirt.lpa.b.plus.net.list[[2]][[4]][[2]])]
+speciesbysite.mod4 <- speciesbysite.mod4[(rownames(speciesbysite.mod4) %in% dirt.lpa.b.plus.net.list[[2]][[4]][[1]]), ]
+
+set.seed(9)  # best performing seed of 1-10 (based on modularity Q value)
+dirt.lpa.b.plus.net.mod4 <- computeModules(speciesbysite.mod4, method = "Beckett", forceLPA = FALSE)
+dirt.lpa.b.plus.net.mod4@likelihood  # Barbers modularity Q = 0.1883207 (6 modules)
+
+# Null model analysis
+
+func <- function(x) computeModules(x)@likelihood
+clus <- makeCluster(20)  # set number of processors for parallel computing
+clusterEvalQ(clus, library(bipartite))
+nm <- replicate(20, simulate(vegan::nullmodel(speciesbysite.mod4, "curveball"), 5, thin = 1000, burnin = 1000), simplify = FALSE)
+nm <- smbind(nm, MARGIN = 3)  # sets 100 simulations across 20 chains
+set.seed(9)
+dirt.lpa.b.plus.net.mod4.curveball.chains <- oecosimu(comm = nm, nestfun = func, alternative = "greater", statistic = "likelihood", parallel = clus)
+dirt.lpa.b.plus.net.mod4.curveball.chains[["oecosimu"]][["pval"]]
+stopCluster(clus)
+
+# Computes participation coefficient (c)  
+
+dirt.lpa.b.plus.net.mod4.cz.lower <- czvalues(dirt.lpa.b.plus.net.mod4, level = "lower")  # site-level calculation
+
+# Site data extraction 
+
+dirt.lpa.b.plus.net.mod4.list <- listModuleInformation(dirt.lpa.b.plus.net.mod4)
+
+site.mod4.1 <- dirt.lpa.b.plus.net.mod4.list[[2]][[1]][[1]]
+site.mod4.1.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% site.mod4.1, 1, 0))
+site.mod4.2 <- dirt.lpa.b.plus.net.mod4.list[[2]][[2]][[1]]
+site.mod4.2.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% site.mod4.2, 1, 0))
+site.mod4.3 <- dirt.lpa.b.plus.net.mod4.list[[2]][[3]][[1]]
+site.mod4.3.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% site.mod4.3, 1, 0))
+site.mod4.4 <- dirt.lpa.b.plus.net.mod4.list[[2]][[4]][[1]]
+site.mod4.4.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% site.mod4.4, 1, 0))
+site.mod4.5 <- dirt.lpa.b.plus.net.mod4.list[[2]][[5]][[1]]
+site.mod4.5.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% site.mod4.5, 1, 0))
+site.mod4.6 <- dirt.lpa.b.plus.net.mod4.list[[2]][[6]][[1]]
+site.mod4.6.vector <- as.matrix(if_else(rownames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% site.mod4.6, 1, 0))
+
+site.mods4 <- cbind(site.mod4.1.vector, site.mod4.2.vector, site.mod4.3.vector, site.mod4.4.vector, site.mod4.5.vector, site.mod4.6.vector)
+rownames(site.mods4) <- rownames(dirt.lpa.b.plus.net.mod4@moduleWeb)
+colnames(site.mods4) <- c("mod04_01", "mod04_02", "mod04_03", "mod04_04", "mod04_05", "mod04_06")
+
+site.mods4 <- merge(site.mods4, dirt.lpa.b.plus.net.mod4.cz.lower$c, by = "row.names")
+rownames(site.mods4) <- site.mods4$Row.names
+site.mods4 <- site.mods4[, -1]
+site.mods4 <- merge(site.mods4, dirt.lpa.b.plus.net.mod4.cz.lower$z, by = "row.names")
+rownames(site.mods4) <- site.mods4$Row.names
+site.mods4 <- site.mods4[, -1]
+
+colnames(site.mods4) <- c("mod04_01", "mod04_02", "mod04_03", "mod04_04", "mod04_05", "mod04_06", "c", "z")
+
+write.csv(site.mods4, file = "site.mods4.csv")
+
+# Sp data extraction 
+
+sp.mod4.1 <- dirt.lpa.b.plus.net.mod4.list[[2]][[1]][[2]]
+sp.mod4.1.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% sp.mod4.1, 1, 0))
+sp.mod4.2 <- dirt.lpa.b.plus.net.mod4.list[[2]][[2]][[2]]
+sp.mod4.2.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% sp.mod4.2, 1, 0))
+sp.mod4.3 <- dirt.lpa.b.plus.net.mod4.list[[2]][[3]][[2]]
+sp.mod4.3.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% sp.mod4.3, 1, 0))
+sp.mod4.4 <- dirt.lpa.b.plus.net.mod4.list[[2]][[4]][[2]]
+sp.mod4.4.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% sp.mod4.4, 1, 0))
+sp.mod4.5 <- dirt.lpa.b.plus.net.mod4.list[[2]][[5]][[2]]
+sp.mod4.5.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% sp.mod4.5, 1, 0))
+sp.mod4.6 <- dirt.lpa.b.plus.net.mod4.list[[2]][[6]][[2]]
+sp.mod4.6.vector <- as.matrix(if_else(colnames(dirt.lpa.b.plus.net.mod4@moduleWeb) %in% sp.mod4.6, 1, 0))
+
+sp.mods4 <- cbind(sp.mod4.1.vector, sp.mod4.2.vector, sp.mod4.3.vector, sp.mod4.4.vector, sp.mod4.5.vector, sp.mod4.6.vector)
+rownames(sp.mods4) <- colnames(dirt.lpa.b.plus.net.mod4@moduleWeb)
+colnames(sp.mods4) <- c("mod04_01", "mod04_02", "mod04_03", "mod04_04", "mod04_05", "mod04_06")
+
+write.csv(sp.mods4, file = "sp.mods4.csv")
+
+##################
+# Clear any variables from the R environment
+##################
+
+rm(list=ls())
+while(dev.cur() != 1){ dev.off(dev.cur()) }
+
+##################
+# Load R packages
+##################
+
+library(car)
+library(plspm)
+library(modEvA)
+library(eulerr)
+library(grid)
+library(gridExtra)
+
+##################
+# Load data in R environment
+##################
+
+sitemodenv <- read.table("sitemodenv.csv", header=T, sep = ",", row.names = 1)  # file available in GitHub repository
+
+##################
+# Correlation analysis
+##################
+
+correlations <- as.data.frame(cbind(sitemodenv$Reg_hab_dens,
+                                    sitemodenv$Riv_net_disp_dist,
+                                    sitemodenv$Glac_lake_marine_dist,
+                                    sitemodenv$Time_since_glac,
+                                    
+                                    sitemodenv$Clim_MWMT,
+                                    sitemodenv$Clim_MCMT,
+                                    sitemodenv$Clim_MSP,
+                                    sitemodenv$Clim_PAS,
+                                    
+                                    sitemodenv$Surface_area,
+                                    sitemodenv$Max_depth,
+                                    sitemodenv$Secchi_depth,
+                                    sitemodenv$Prop_shield_litho))
+
+colnames(correlations) <- c("Regional habitat density", "Spatial network distance", "Glacial lake/marine extent distance", "Time since glaciation",
+                            "Mean warmest month temperature", "Mean coldest month temperature", "May-September precipitation", "Snow as precipitation",
+                            "Surface area","Maximum depth","Secchi depth","Proportion shield lithology")
+
+cor(correlations)
+
+##################
+# Data transformations
+##################
+
+sitemodenv$Reg_hab_dens_logit <- logit(sitemodenv$Reg_hab_dens)
+sitemodenv$Riv_net_disp_dist_log <- log(sitemodenv$Riv_net_disp_dist + min(sitemodenv$Riv_net_disp_dist[sitemodenv$Riv_net_disp_dist>0]))
+sitemodenv$Glac_lake_marine_dist_log <- log(sitemodenv$Glac_lake_marine_dist + min(sitemodenv$Glac_lake_marine_dist[sitemodenv$Glac_lake_marine_dist>0]))
+sitemodenv$Time_since_glac_log <- log(sitemodenv$Time_since_glac)
+
+sitemodenv$Clim_MWMT_log <- log(sitemodenv$Clim_MWMT+273.15)
+sitemodenv$Clim_MCMT_log <- log(sitemodenv$Clim_MCMT+273.15)
+sitemodenv$Clim_MSP_log <- log(sitemodenv$Clim_MSP)
+sitemodenv$Clim_PAS_log <- log(sitemodenv$Clim_PAS)
+
+sitemodenv$Surface_area_log <- log(sitemodenv$Surface_area)
+sitemodenv$Max_depth_log <- log(sitemodenv$Max_depth)
+sitemodenv$Secchi_depth_log <- log(sitemodenv$Secchi_depth)
+sitemodenv$Prop_shield_litho_logit <- logit(sitemodenv$Prop_shield_litho, adjust=min(sitemodenv$Prop_shield_litho[sitemodenv$Prop_shield_litho>0]))
+
+##################
+# Non-metric partial least-squares structural equation model
+##################
+
+#### Multilevel categorical ####
+
+# rows of the path matrix
+
+Connectivity = c(0, 0, 0, 0)
+Climate = c(0, 0, 0, 0)
+Habitat = c(0, 0, 0, 0)
+Categ = c(1, 1, 1, 0)
+
+# vector of modes A reflective and B composite
+
+sem_modes = c("B", "B", "B", "B")
+
+# path matrix (inner model)
+
+sem_path = rbind(Connectivity, Climate, Habitat, Categ)
+colnames(sem_path) = rownames(sem_path)
+
+# blocks of indicators (outer model)
+
+sem_blocks = list(c("Reg_hab_dens_logit", "Riv_net_disp_dist_log", "Glac_lake_marine_dist_log", "Time_since_glac_log"),
+                  c("Clim_MWMT_log", "Clim_MCMT_log", "Clim_MSP_log", "Clim_PAS_log"),
+                  c("Surface_area_log", "Max_depth_log", "Secchi_depth_log", "Prop_shield_litho_logit"),
+                  c("Categ"))
+
+# non-metric scaling
+
+sem_scaling <- list(c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NOM"))
+
+# run NM-PLS-SEM
+
+set.seed(1)
+sitemodenv$Categ <- as.factor(sitemodenv$Categ)
+sem_pls_categ_log = plspm(sitemodenv, sem_path, sem_blocks, modes = sem_modes, scaling = sem_scaling, scaled = TRUE,
+                          scheme = "path", boot.val = TRUE, br = 1000)
+summary(sem_pls_categ_log)
+
+# capture categorical latent variable scores
+
+sem_pls_categ_log_scores <- sem_pls_categ_log$scores
+
+#### Module 1 ####
+
+# rows of the path matrix
+
+Connectivity = c(0, 0, 0, 0)
+Climate = c(0, 0, 0, 0)
+Habitat = c(0, 0, 0, 0)
+mod01 = c(1, 1, 1, 0)
+
+# vector of modes A reflective and B composite
+
+sem_modes = c("B", "B", "B", "B")
+
+# path matrix (inner model)
+
+sem_path = rbind(Connectivity, Climate, Habitat, mod01)
+colnames(sem_path) = rownames(sem_path)
+
+# blocks of indicators (outer model)
+
+sem_blocks = list(c("Reg_hab_dens_logit", "Riv_net_disp_dist_log", "Glac_lake_marine_dist_log", "Time_since_glac_log"),
+                  c("Clim_MWMT_log", "Clim_MCMT_log", "Clim_MSP_log", "Clim_PAS_log"),
+                  c("Surface_area_log", "Max_depth_log", "Secchi_depth_log", "Prop_shield_litho_logit"),
+                  c("mod01"))
+
+# non-metric scaling
+
+sem_scaling <- list(c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NOM"))
+
+# run NM-PLS-SEM
+
+set.seed(1)
+sem_pls_mod01_log = plspm(sitemodenv, sem_path, sem_blocks, modes = sem_modes, scaling = sem_scaling, scaled = TRUE,
+                          scheme = "path", boot.val = TRUE, br = 1000)
+summary(sem_pls_mod01_log)
+
+# capture mod 01 latent variable scores
+
+sem_pls_mod01_log_scores <- sem_pls_mod01_log$scores
+
+#### Module 2 ####
+
+# rows of the path matrix
+
+Connectivity = c(0, 0, 0, 0)
+Climate = c(0, 0, 0, 0)
+Habitat = c(0, 0, 0, 0)
+mod02 = c(1, 1, 1, 0)
+
+# vector of modes A reflective and B composite
+
+sem_modes = c("B", "B", "B", "B")
+
+# path matrix (inner model)
+
+sem_path = rbind(Connectivity, Climate, Habitat, mod02)
+colnames(sem_path) = rownames(sem_path)
+
+# blocks of indicators (outer model)
+
+sem_blocks = list(c("Reg_hab_dens_logit", "Riv_net_disp_dist_log", "Glac_lake_marine_dist_log", "Time_since_glac_log"),
+                  c("Clim_MWMT_log", "Clim_MCMT_log", "Clim_MSP_log", "Clim_PAS_log"),
+                  c("Surface_area_log", "Max_depth_log", "Secchi_depth_log", "Prop_shield_litho_logit"),
+                  c("mod02"))
+
+# non-metric scaling
+
+sem_scaling <- list(c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NOM"))
+
+# run NM-PLS-SEM
+
+set.seed(1)
+sem_pls_mod02_log = plspm(sitemodenv, sem_path, sem_blocks, modes = sem_modes, scaling = sem_scaling, scaled = TRUE,
+                          scheme = "path", boot.val = TRUE, br = 1000)
+summary(sem_pls_mod02_log)
+
+# capture mod 02 latent variable scores
+
+sem_pls_mod02_log_scores <- sem_pls_mod02_log$scores
+
+#### Module 3 ####
+
+# rows of the path matrix
+
+Connectivity = c(0, 0, 0, 0)
+Climate = c(0, 0, 0, 0)
+Habitat = c(0, 0, 0, 0)
+mod03 = c(1, 1, 1, 0)
+
+# vector of modes A reflective and B composite
+
+sem_modes = c("B", "B", "B", "B")
+
+# path matrix (inner model)
+
+sem_path = rbind(Connectivity, Climate, Habitat, mod03)
+colnames(sem_path) = rownames(sem_path)
+
+# blocks of indicators (outer model)
+
+sem_blocks = list(c("Reg_hab_dens_logit", "Riv_net_disp_dist_log", "Glac_lake_marine_dist_log", "Time_since_glac_log"),
+                  c("Clim_MWMT_log", "Clim_MCMT_log", "Clim_MSP_log", "Clim_PAS_log"),
+                  c("Surface_area_log", "Max_depth_log", "Secchi_depth_log", "Prop_shield_litho_logit"),
+                  c("mod03"))
+
+# non-metric scaling
+
+sem_scaling <- list(c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NOM"))
+
+# run NM-PLS-SEM
+
+set.seed(1)
+sem_pls_mod03_log = plspm(sitemodenv, sem_path, sem_blocks, modes = sem_modes, scaling = sem_scaling, scaled = TRUE,
+                          scheme = "path", boot.val = TRUE, br = 1000)
+summary(sem_pls_mod03_log)
+
+# capture mod 03 latent variable scores
+
+sem_pls_mod03_log_scores <- sem_pls_mod03_log$scores
+
+#### Module 4 ####
+
+# rows of the path matrix
+
+Connectivity = c(0, 0, 0, 0)
+Climate = c(0, 0, 0, 0)
+Habitat = c(0, 0, 0, 0)
+mod04 = c(1, 1, 1, 0)
+
+# vector of modes A reflective and B composite
+
+sem_modes = c("B", "B", "B", "B")
+
+# path matrix (inner model)
+
+sem_path = rbind(Connectivity, Climate, Habitat, mod04)
+colnames(sem_path) = rownames(sem_path)
+
+# blocks of indicators (outer model)
+
+sem_blocks = list(c("Reg_hab_dens_logit", "Riv_net_disp_dist_log", "Glac_lake_marine_dist_log", "Time_since_glac_log"),
+                  c("Clim_MWMT_log", "Clim_MCMT_log", "Clim_MSP_log", "Clim_PAS_log"),
+                  c("Surface_area_log", "Max_depth_log", "Secchi_depth_log", "Prop_shield_litho_logit"),
+                  c("mod04"))
+
+# non-metric scaling
+
+sem_scaling <- list(c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NUM", "NUM", "NUM", "NUM"),
+                    c("NOM"))
+
+# run NM-PLS-SEM
+
+set.seed(1)
+sem_pls_mod04_log = plspm(sitemodenv, sem_path, sem_blocks, modes = sem_modes, scaling = sem_scaling, scaled = TRUE,
+                          scheme = "path", boot.val = TRUE, br = 1000)
+summary(sem_pls_mod04_log)
+
+#### capture mod 04 latent variable scores ####
+
+sem_pls_mod04_log_scores <- sem_pls_mod04_log$scores
+
+#### Merge NM-PLS-SEM results ####
+
+colnames(sem_pls_categ_log_scores) <- c("categ_connect_log", "categ_climate_log", "categ_habitat_log", "categ_log")
+colnames(sem_pls_mod01_log_scores) <- c("mod01_connect_log", "mod01_climate_log", "mod01_habitat_log", "mod01_log")
+colnames(sem_pls_mod02_log_scores) <- c("mod02_connect_log", "mod02_climate_log", "mod02_habitat_log", "mod02_log")
+colnames(sem_pls_mod03_log_scores) <- c("mod03_connect_log", "mod03_climate_log", "mod03_habitat_log", "mod03_log")
+colnames(sem_pls_mod04_log_scores) <- c("mod04_connect_log", "mod04_climate_log", "mod04_habitat_log", "mod04_log")
+
+sem_pls_log_scores <- as.data.frame(cbind(sem_pls_categ_log_scores, sem_pls_mod01_log_scores, sem_pls_mod02_log_scores, sem_pls_mod03_log_scores, sem_pls_mod04_log_scores))
+
+sem_pls_log_scores <- merge(sem_pls_log_scores, sitemodenv, by = "row.names")
+rownames(sem_pls_log_scores) <- sem_pls_log_scores$Row.names
+sem_pls_log_scores <- sem_pls_log_scores[, -1]
+
+##################
+# Multiple logistic regression and variation partitioning for modules
+##################
+
+#### Module 1 ####
+
+# ABC logistic regression
+
+glm_mod01_log_ABC <- glm(mod01 ~ mod01_connect_log + mod01_climate_log + mod01_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod01_log_ABC_Tjur <- RsqGLM(glm_mod01_log_ABC)$Tjur
+summary(glm_mod01_log_ABC)
+confint(glm_mod01_log_ABC)
+AUC(glm_mod01_log_ABC)
+
+# AB logistic regression
+
+glm_mod01_log_AB <- glm(mod01 ~ mod01_connect_log + mod01_climate_log, family = binomial, data = sem_pls_log_scores)
+mod01_log_AB_Tjur <- RsqGLM(glm_mod01_log_AB)$Tjur
+summary(glm_mod01_log_AB)
+confint(glm_mod01_log_AB)
+AUC(glm_mod01_log_AB)
+
+# AC logistic regression
+
+glm_mod01_log_AC <- glm(mod01 ~ mod01_connect_log + mod01_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod01_log_AC_Tjur <- RsqGLM(glm_mod01_log_AC)$Tjur
+summary(glm_mod01_log_AC)
+confint(glm_mod01_log_AC)
+AUC(glm_mod01_log_AC)
+
+# BC logistic regression
+
+glm_mod01_log_BC <- glm(mod01 ~ mod01_climate_log + mod01_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod01_log_BC_Tjur <- RsqGLM(glm_mod01_log_BC)$Tjur
+summary(glm_mod01_log_BC)
+confint(glm_mod01_log_BC)
+AUC(glm_mod01_log_BC)
+
+# A logistic regression
+
+glm_mod01_log_A <- glm(mod01 ~ mod01_connect_log, family = binomial, data = sem_pls_log_scores)
+mod01_log_A_Tjur <- RsqGLM(glm_mod01_log_A)$Tjur
+summary(glm_mod01_log_A)
+confint(glm_mod01_log_A)
+AUC(glm_mod01_log_A)
+
+# B logistic regression
+
+glm_mod01_log_B <- glm(mod01 ~ mod01_climate_log, family = binomial, data = sem_pls_log_scores)
+mod01_log_B_Tjur <- RsqGLM(glm_mod01_log_B)$Tjur
+summary(glm_mod01_log_B)
+confint(glm_mod01_log_B)
+AUC(glm_mod01_log_B)
+
+# C logistic regression
+
+glm_mod01_log_C <- glm(mod01 ~ mod01_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod01_log_C_Tjur <- RsqGLM(glm_mod01_log_C)$Tjur
+summary(glm_mod01_log_C)
+confint(glm_mod01_log_C)
+AUC(glm_mod01_log_C)
+
+# Variation partitioning
+
+vp_mod01_log_Tjur <- varPart(A = mod01_log_A_Tjur,
+                             B = mod01_log_B_Tjur,
+                             C = mod01_log_C_Tjur,
+                             AB = mod01_log_AB_Tjur,
+                             AC = mod01_log_AC_Tjur,
+                             BC = mod01_log_BC_Tjur,
+                             ABC = mod01_log_ABC_Tjur,
+                             A.name = "Connectivity",
+                             B.name = "Climate",
+                             C.name = "Habitat")
+
+# Euler plot
+
+vp_mod01_log_Tjur.euler <- euler(c("Connectivity" = round(if(vp_mod01_log_Tjur$Proportion[1] < 0) {0} else {vp_mod01_log_Tjur$Proportion[1]}, digits = 5), #a
+                                   "Climate" = round(if(vp_mod01_log_Tjur$Proportion[2] < 0) {0} else {vp_mod01_log_Tjur$Proportion[2]}, digits = 5), #b
+                                   "Habitat" = round(if(vp_mod01_log_Tjur$Proportion[3] < 0) {0} else {vp_mod01_log_Tjur$Proportion[3]}, digits = 5), #c
+                                   "Connectivity&Climate"= round(if(vp_mod01_log_Tjur$Proportion[4] < 0) {0} else {vp_mod01_log_Tjur$Proportion[4]}, digits = 5), #d
+                                   "Climate&Habitat" = round(if(vp_mod01_log_Tjur$Proportion[5] < 0) {0} else {vp_mod01_log_Tjur$Proportion[5]}, digits = 5), #e
+                                   "Connectivity&Habitat" = round(if(vp_mod01_log_Tjur$Proportion[6] < 0) {0} else {vp_mod01_log_Tjur$Proportion[6]}, digits = 5), #f
+                                   "Connectivity&Climate&Habitat" = round(if(vp_mod01_log_Tjur$Proportion[7] < 0) {0} else {vp_mod01_log_Tjur$Proportion[7]}, digits = 5)), #g
+                                 shape="ellipse")
+
+vp_mod01_log_Tjur.euler.p <- plot(vp_mod01_log_Tjur.euler,
+                                  fill = list(fill = c("#8dd3c7", "#ffffb3", "#bebada"), alpha=c(0.65, 0.65, 0.65)),
+                                  edges = list(lty = 1:3, lex = 2), quantities = list(cex = 0.5), adjust_labels = TRUE)
+
+#### Module 2 ####
+
+# ABC logistic regression
+
+glm_mod02_log_ABC <- glm(mod02 ~ mod02_connect_log + mod02_climate_log + mod02_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod02_log_ABC_Tjur <- RsqGLM(glm_mod02_log_ABC)$Tjur
+summary(glm_mod02_log_ABC)
+confint(glm_mod02_log_ABC)
+AUC(glm_mod02_log_ABC)
+
+# AB logistic regression
+
+glm_mod02_log_AB <- glm(mod02 ~ mod02_connect_log + mod02_climate_log, family = binomial, data = sem_pls_log_scores)
+mod02_log_AB_Tjur <- RsqGLM(glm_mod02_log_AB)$Tjur
+summary(glm_mod02_log_AB)
+confint(glm_mod02_log_AB)
+AUC(glm_mod02_log_AB)
+
+# AC logistic regression
+
+glm_mod02_log_AC <- glm(mod02 ~ mod02_connect_log + mod02_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod02_log_AC_Tjur <- RsqGLM(glm_mod02_log_AC)$Tjur
+summary(glm_mod02_log_AC)
+confint(glm_mod02_log_AC)
+AUC(glm_mod02_log_AC)
+
+# BC logistic regression
+
+glm_mod02_log_BC <- glm(mod02 ~ mod02_climate_log + mod02_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod02_log_BC_Tjur <- RsqGLM(glm_mod02_log_BC)$Tjur
+summary(glm_mod02_log_BC)
+confint(glm_mod02_log_BC)
+AUC(glm_mod02_log_BC)
+
+# A logistic regression
+
+glm_mod02_log_A <- glm(mod02 ~ mod02_connect_log, family = binomial, data = sem_pls_log_scores)
+mod02_log_A_Tjur <- RsqGLM(glm_mod02_log_A)$Tjur
+summary(glm_mod02_log_A)
+confint(glm_mod02_log_A)
+AUC(glm_mod02_log_A)
+
+# B logistic regression
+
+glm_mod02_log_B <- glm(mod02 ~ mod02_climate_log, family = binomial, data = sem_pls_log_scores)
+mod02_log_B_Tjur <- RsqGLM(glm_mod02_log_B)$Tjur
+summary(glm_mod02_log_B)
+confint(glm_mod02_log_B)
+AUC(glm_mod02_log_B)
+
+# C logistic regression
+
+glm_mod02_log_C <- glm(mod02 ~ mod02_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod02_log_C_Tjur <- RsqGLM(glm_mod02_log_C)$Tjur
+summary(glm_mod02_log_C)
+confint(glm_mod02_log_C)
+AUC(glm_mod02_log_C)
+
+# Variation partitioning
+
+vp_mod02_log_Tjur <- varPart(A = mod02_log_A_Tjur,
+                             B = mod02_log_B_Tjur,
+                             C = mod02_log_C_Tjur,
+                             AB = mod02_log_AB_Tjur,
+                             AC = mod02_log_AC_Tjur,
+                             BC = mod02_log_BC_Tjur,
+                             ABC = mod02_log_ABC_Tjur,
+                             A.name = "Connectivity",
+                             B.name = "Climate",
+                             C.name = "Habitat")
+
+# Euler plot
+
+vp_mod02_log_Tjur.euler <- euler(c("Connectivity" = round(if(vp_mod02_log_Tjur$Proportion[1] < 0) {0} else {vp_mod02_log_Tjur$Proportion[1]}, digits = 5), #a
+                                   "Climate" = round(if(vp_mod02_log_Tjur$Proportion[2] < 0) {0} else {vp_mod02_log_Tjur$Proportion[2]}, digits = 5), #b
+                                   "Habitat" = round(if(vp_mod02_log_Tjur$Proportion[3] < 0) {0} else {vp_mod02_log_Tjur$Proportion[3]}, digits = 5), #c
+                                   "Connectivity&Climate"= round(if(vp_mod02_log_Tjur$Proportion[4] < 0) {0} else {vp_mod02_log_Tjur$Proportion[4]}, digits = 5), #d
+                                   "Climate&Habitat" = round(if(vp_mod02_log_Tjur$Proportion[5] < 0) {0} else {vp_mod02_log_Tjur$Proportion[5]}, digits = 5), #e
+                                   "Connectivity&Habitat" = round(if(vp_mod02_log_Tjur$Proportion[6] < 0) {0} else {vp_mod02_log_Tjur$Proportion[6]}, digits = 5), #f
+                                   "Connectivity&Climate&Habitat" = round(if(vp_mod02_log_Tjur$Proportion[7] < 0) {0} else {vp_mod02_log_Tjur$Proportion[7]}, digits = 5)), #g
+                                 shape="ellipse")
+
+vp_mod02_log_Tjur.euler.p <- plot(vp_mod02_log_Tjur.euler,
+                                  fill = list(fill = c("#8dd3c7", "#ffffb3", "#bebada"), alpha = c(0.65, 0.65, 0.65)),
+                                  edges = list(lty = 1:3, lex = 2), quantities = list(cex = 0.5), adjust_labels = TRUE)
+
+#### Module 3 ####
+
+# ABC logistic regression
+
+glm_mod03_log_ABC <- glm(mod03 ~ mod03_connect_log + mod03_climate_log + mod03_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod03_log_ABC_Tjur <- RsqGLM(glm_mod03_log_ABC)$Tjur
+summary(glm_mod03_log_ABC)
+confint(glm_mod03_log_ABC)
+AUC(glm_mod03_log_ABC)
+
+# AB logistic regression
+
+glm_mod03_log_AB <- glm(mod03 ~ mod03_connect_log + mod03_climate_log, family = binomial, data = sem_pls_log_scores)
+mod03_log_AB_Tjur <- RsqGLM(glm_mod03_log_AB)$Tjur
+summary(glm_mod03_log_AB)
+confint(glm_mod03_log_AB)
+AUC(glm_mod03_log_AB)
+
+# AC logistic regression
+
+glm_mod03_log_AC <- glm(mod03 ~ mod03_connect_log + mod03_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod03_log_AC_Tjur <- RsqGLM(glm_mod03_log_AC)$Tjur
+summary(glm_mod03_log_AC)
+confint(glm_mod03_log_AC)
+AUC(glm_mod03_log_AC)
+
+# BC logistic regression
+
+glm_mod03_log_BC <- glm(mod03 ~ mod03_climate_log + mod03_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod03_log_BC_Tjur <- RsqGLM(glm_mod03_log_BC)$Tjur
+summary(glm_mod03_log_BC)
+confint(glm_mod03_log_BC)
+AUC(glm_mod03_log_BC)
+
+# A logistic regression
+
+glm_mod03_log_A <- glm(mod03 ~ mod03_connect_log, family = binomial, data = sem_pls_log_scores)
+mod03_log_A_Tjur <- RsqGLM(glm_mod03_log_A)$Tjur
+summary(glm_mod03_log_A)
+confint(glm_mod03_log_A)
+AUC(glm_mod03_log_A)
+
+# B logistic regression
+
+glm_mod03_log_B <- glm(mod03 ~ mod03_climate_log, family = binomial, data = sem_pls_log_scores)
+mod03_log_B_Tjur <- RsqGLM(glm_mod03_log_B)$Tjur
+summary(glm_mod03_log_B)
+confint(glm_mod03_log_B)
+AUC(glm_mod03_log_B)
+
+# C logistic regression
+
+glm_mod03_log_C <- glm(mod03 ~ mod03_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod03_log_C_Tjur <- RsqGLM(glm_mod03_log_C)$Tjur
+summary(glm_mod03_log_C)
+confint(glm_mod03_log_C)
+AUC(glm_mod03_log_C)
+
+# Variation partitioning
+
+vp_mod03_log_Tjur <- varPart(A = mod03_log_A_Tjur,
+                             B = mod03_log_B_Tjur,
+                             C = mod03_log_C_Tjur,
+                             AB = mod03_log_AB_Tjur,
+                             AC = mod03_log_AC_Tjur,
+                             BC = mod03_log_BC_Tjur,
+                             ABC = mod03_log_ABC_Tjur,
+                             A.name = "Connectivity",
+                             B.name = "Climate",
+                             C.name = "Habitat")
+
+# Euler plot
+
+vp_mod03_log_Tjur.euler <- euler(c("Connectivity" = round(if(vp_mod03_log_Tjur$Proportion[1] < 0) {0} else {vp_mod03_log_Tjur$Proportion[1]}, digits = 5), #a
+                                   "Climate" = round(if(vp_mod03_log_Tjur$Proportion[2] < 0) {0} else {vp_mod03_log_Tjur$Proportion[2]}, digits = 5), #b
+                                   "Habitat" = round(if(vp_mod03_log_Tjur$Proportion[3] < 0) {0} else {vp_mod03_log_Tjur$Proportion[3]}, digits = 5), #c
+                                   "Connectivity&Climate"= round(if(vp_mod03_log_Tjur$Proportion[4] < 0) {0} else {vp_mod03_log_Tjur$Proportion[4]}, digits = 5), #d
+                                   "Climate&Habitat" = round(if(vp_mod03_log_Tjur$Proportion[5] < 0) {0} else {vp_mod03_log_Tjur$Proportion[5]}, digits = 5), #e
+                                   "Connectivity&Habitat" = round(if(vp_mod03_log_Tjur$Proportion[6] < 0) {0} else {vp_mod03_log_Tjur$Proportion[6]}, digits = 5), #f
+                                   "Connectivity&Climate&Habitat" = round(if(vp_mod03_log_Tjur$Proportion[7] < 0) {0} else {vp_mod03_log_Tjur$Proportion[7]}, digits = 5)), #g
+                                 shape="ellipse")
+
+vp_mod03_log_Tjur.euler.p <- plot(vp_mod03_log_Tjur.euler,
+                                  fill = list(fill = c("#8dd3c7", "#ffffb3", "#bebada"), alpha = c(0.65, 0.65, 0.65)),
+                                  edges = list(lty = 1:3, lex = 2), quantities = list(cex = 0.5), adjust_labels = TRUE)
+
+#### Module 4 ####
+
+# ABC logistic regression
+
+glm_mod04_log_ABC <- glm(mod04 ~ mod04_connect_log + mod04_climate_log + mod04_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod04_log_ABC_Tjur <- RsqGLM(glm_mod04_log_ABC)$Tjur
+summary(glm_mod04_log_ABC)
+confint(glm_mod04_log_ABC)
+AUC(glm_mod04_log_ABC)
+
+# AB logistic regression
+
+glm_mod04_log_AB <- glm(mod04 ~ mod04_connect_log + mod04_climate_log, family = binomial, data = sem_pls_log_scores)
+mod04_log_AB_Tjur <- RsqGLM(glm_mod04_log_AB)$Tjur
+summary(glm_mod04_log_AB)
+confint(glm_mod04_log_AB)
+AUC(glm_mod04_log_AB)
+
+# AC logistic regression
+
+glm_mod04_log_AC <- glm(mod04 ~ mod04_connect_log + mod04_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod04_log_AC_Tjur <- RsqGLM(glm_mod04_log_AC)$Tjur
+summary(glm_mod04_log_AC)
+confint(glm_mod04_log_AC)
+AUC(glm_mod04_log_AC)
+
+# BC logistic regression
+
+glm_mod04_log_BC <- glm(mod04 ~ mod04_climate_log + mod04_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod04_log_BC_Tjur <- RsqGLM(glm_mod04_log_BC)$Tjur
+summary(glm_mod04_log_BC)
+confint(glm_mod04_log_BC)
+AUC(glm_mod04_log_BC)
+
+# A logistic regression
+
+glm_mod04_log_A <- glm(mod04 ~ mod04_connect_log, family = binomial, data = sem_pls_log_scores)
+mod04_log_A_Tjur <- RsqGLM(glm_mod04_log_A)$Tjur
+summary(glm_mod04_log_A)
+confint(glm_mod04_log_A)
+AUC(glm_mod04_log_A)
+
+# B logistic regression
+
+glm_mod04_log_B <- glm(mod04 ~ mod04_climate_log, family = binomial, data = sem_pls_log_scores)
+mod04_log_B_Tjur <- RsqGLM(glm_mod04_log_B)$Tjur
+summary(glm_mod04_log_B)
+confint(glm_mod04_log_B)
+AUC(glm_mod04_log_B)
+
+# C logistic regression
+
+glm_mod04_log_C <- glm(mod04 ~ mod04_habitat_log, family = binomial, data = sem_pls_log_scores)
+mod04_log_C_Tjur <- RsqGLM(glm_mod04_log_C)$Tjur
+summary(glm_mod04_log_C)
+confint(glm_mod04_log_C)
+AUC(glm_mod04_log_C)
+
+# Variation partitioning
+
+vp_mod04_log_Tjur <- varPart(A = mod04_log_A_Tjur,
+                             B = mod04_log_B_Tjur,
+                             C = mod04_log_C_Tjur,
+                             AB = mod04_log_AB_Tjur,
+                             AC = mod04_log_AC_Tjur,
+                             BC = mod04_log_BC_Tjur,
+                             ABC = mod04_log_ABC_Tjur,
+                             A.name = "Connectivity",
+                             B.name = "Climate",
+                             C.name = "Habitat")
+
+# Euler plot
+
+vp_mod04_log_Tjur.euler <- euler(c("Connectivity" = round(if(vp_mod04_log_Tjur$Proportion[1] < 0) {0} else {vp_mod04_log_Tjur$Proportion[1]}, digits = 5), #a
+                                   "Climate" = round(if(vp_mod04_log_Tjur$Proportion[2] < 0) {0} else {vp_mod04_log_Tjur$Proportion[2]}, digits = 5), #b
+                                   "Habitat" = round(if(vp_mod04_log_Tjur$Proportion[3] < 0) {0} else {vp_mod04_log_Tjur$Proportion[3]}, digits = 5), #c
+                                   "Connectivity&Climate"= round(if(vp_mod04_log_Tjur$Proportion[4] < 0) {0} else {vp_mod04_log_Tjur$Proportion[4]}, digits = 5), #d
+                                   "Climate&Habitat" = round(if(vp_mod04_log_Tjur$Proportion[5] < 0) {0} else {vp_mod04_log_Tjur$Proportion[5]}, digits = 5), #e
+                                   "Connectivity&Habitat" = round(if(vp_mod04_log_Tjur$Proportion[6] < 0) {0} else {vp_mod04_log_Tjur$Proportion[6]}, digits = 5), #f
+                                   "Connectivity&Climate&Habitat" = round(if(vp_mod04_log_Tjur$Proportion[7] < 0) {0} else {vp_mod04_log_Tjur$Proportion[7]}, digits = 5)), #g
+                                 shape="ellipse")
+
+vp_mod04_log_Tjur.euler.p <- plot(vp_mod04_log_Tjur.euler,
+                                  fill = list(fill = c("#8dd3c7", "#ffffb3", "#bebada"), alpha = c(0.65, 0.65, 0.65)),
+                                  edges = list(lty = 1:3, lex = 2), quantities = list(cex = 0.5), adjust_labels = TRUE)
+
+#### Plot Euler grid ####
+
+grid.arrange(grobTree(vp_mod01_log_Tjur.euler.p), grobTree(vp_mod02_log_Tjur.euler.p), grobTree(vp_mod03_log_Tjur.euler.p), grobTree(vp_mod04_log_Tjur.euler.p), ncol=4, 
+             widths = c(0.979, 0.636, 0.661, 0.856))  # widths used to scale plots according to xlim from 'euler' objects
+
+#...............................................................................................#
