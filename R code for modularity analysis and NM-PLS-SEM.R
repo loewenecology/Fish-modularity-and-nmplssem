@@ -31,7 +31,7 @@ library(dplyr)
 # Load data in R environment
 ##################
 
-DRYAD_speciesbysite <- read.table("DRYAD_speciesbysite.csv", header = T, sep = ",", row.names = 1)  # file available from DRYAD (doi)
+DRYAD_speciesbysite <- read.table("DRYAD_speciesbysite.csv", header = T, sep = ",", row.names = 1)  # file available from DRYAD (https://doi.org/10.5061/dryad.44j0zpcfc)
 speciesbysite <- DRYAD_speciesbysite[5:94] # remove location data to create site by species data frame
 
 ##################
